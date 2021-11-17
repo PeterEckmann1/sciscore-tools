@@ -9,9 +9,13 @@ A set of tools to extract text from various file formats, run it through SciScor
  * Obtain the `methods-model.bin` file and place it in the same directory as `pdftools.py`
  * Obtain a `auth.json` file with your SciScore API credentials
 
-## Text extraction
+## Text extraction and API querying
 
-Currently, text can be extracted from `.doc`, `.docx`, `.xml`, and `.pdf` files. To extract from a PDF (and the process for other file formats is similar), first create a new object with `pdf = PDF('example.pdf')`. This will perform the conversion using `pdftotext` and attempt to remove boilerplate text like line numbers, copyright information, etc. To access this text, call `pdf.get_text(section)`. For our purposes, call `methods = pdf.get_text('methods')` to extract the methods section using a sentence classifier.
-
-## Querying the SciScore API
-
+First create a SciScore object with 
+```
+import sciscore
+api = sciscore.SciScore('report_folder')
+```
+where `report_folder` is the location to accumulate API responses. Then, call `api.generate_report_from_file('example.pdf', 'example_doi')` for each file you want the SciScore of, where `example.pdf` is a file of format `.pdf`, `.doc`, `.docx`, or `.xml`, and `example_doi` is the DOI or other identifier for the file, which will show up in a column of the final table.
+<br>
+When finished with running all your files, call `api.make_csv('out.csv')` to generate a csv with all the results together. Individual reports for each paper are also stored in `report_folder`.
