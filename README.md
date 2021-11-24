@@ -4,6 +4,8 @@ A set of tools to extract text from various file formats, run it through SciScor
 
 ## Setup
 
+Should work on any Python 3 verison.
+
  * Install the requires packages with `pip install fasttext spacy numpy requests Unidecode`
  * `pdftotext` must also be installed from https://www.xpdfreader.com/download.html
  * Obtain the `methods-model.bin` file and place it in the same directory as `pdftools.py`
