@@ -10,7 +10,7 @@ class XML:
         if sections:
             return ' '.join(ET.tostring(sections[0], encoding='utf-8', method='text').decode('utf-8').replace('\n', ' ').split())
         else:
-            # scuffed jats aka html
+            # for html only
             for header in self.file.xpath('.//h2'):
                 if section.replace('methods', 'method') in ET.tostring(header, encoding='utf-8', method='text').decode('utf-8').lower():
                     section_xml = ET.tostring(self.file).decode('utf-8').split(ET.tostring(header).decode('utf-8'))[1].split('<h2')[0]
