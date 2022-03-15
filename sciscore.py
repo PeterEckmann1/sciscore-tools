@@ -5,6 +5,7 @@ import json
 import csv
 import unidecode
 import string
+import subprocess
 
 
 auth = json.load(open('auth.json', 'r'))
@@ -58,6 +59,24 @@ class SciScore:
             self.generate_report_from_text(jatstools.XML(file).get_text('method'), paper_id)
         else:
             raise TypeError('invalid file type; please enter a .pdf, .xml, .docx, or .doc')
+
+    def generate_report_from_pmid(self, pmid):
+        r = requests.get(f'https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/', params={'tool': 'sciscore-tools', 'email': 'petereckmann@gmail.com', 'ids': pmid}).text
+        if '<version pmcid="' in r:
+            pmcid = r.split('<version pmcid="')[1].split('"')[0].split('.')[0]
+            return self.generate_report_from_pmcid(pmcid)
+
+    def generate_report_from_pmcid(self, pmcid):
+        import jatstools
+        files = open('oa_file_list.txt', 'r').readlines()
+        for line in files:
+            if pmcid in line:
+                subprocess.check_call('rm -rf package/*', shell=True)
+                url = 'https://ftp.ncbi.nlm.nih.gov/pub/pmc/' + line.split()[0]
+                subprocess.check_call(f'curl -o package/package.tar.gz {url}', shell=True, stderr=subprocess.DEVNULL)
+                subprocess.check_call('cd package; gunzip -c package.tar.gz | tar xopf -', shell=True)
+                file = subprocess.check_output('find package/*/*.nxml', shell=True).decode('utf-8').strip()
+                self.generate_report_from_text(jatstools.XML(file).get_text('method'), pmcid)
 
     def generate_report_from_text(self, methods, paper_id):
         folder_name = f"{self.folder}/{paper_id.replace('/', '_')}"
