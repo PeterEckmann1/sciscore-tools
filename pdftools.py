@@ -2,36 +2,69 @@ import subprocess
 import os
 from string import ascii_letters, ascii_uppercase
 from collections import Counter
-import fasttext
-from spacy.lang.en import English
+# import fasttext
+# from spacy.lang.en import English
 import re
 import numpy as np
 import hashlib
+#from PIL import Image
 
 
 #todo line number removal doesn't work on 10.1101/2020.11.06.372037
-model = fasttext.load_model('methods-model.bin')
-nlp = English()
-sentencizer = nlp.create_pipe('sentencizer')
-nlp.add_pipe(sentencizer)
+# model = fasttext.load_model('utils/extractor/methods-model.bin')
+# nlp = English()
+# sentencizer = nlp.create_pipe('sentencizer')
+# nlp.add_pipe(sentencizer)
 
 REFERENCES_TERMS = ['Citations', 'CITATIONS', 'References', 'REFERENCES', 'Reference', 'REFERENCE', 'Bibliography', 'BIBLIOGRAPHY', 'Works Cited', 'WORKS CITED']
 DISCUSSION_TERMS = ['Discussion', 'DISCUSSION', 'Discussion and Conclusion', 'Discussion and Conclusions', 'DISCUSSION AND CONCLUSION', 'DISCUSSION AND CONCLUSIONS'] #should results and discussion be included?
 DISCUSSION_END_TERMS = ['Citations', 'CITATIONS', 'References', 'REFERENCES', 'Bibliography', 'BIBLIOGRAPHY', 'Works Cited', 'WORKS CITED', 'Acknowledgements', 'ACKNOWLEDGEMENTS', 'Acknowledgments', 'ACKNOWLEDGMENTS', 'Author contribution', 'Author contributions', 'AUTHOR CONTRIBUTION', 'AUTHOR CONTRIBUTIONS', 'Contributions', 'CONTRIBUTIONS', 'Conflicts of interest', 'CONFLICTS OF INTEREST', 'Conflict of interest', 'CONFLICT OF INTEREST', 'Data availability', 'DATA AVAILABILITY', 'Code availability', 'CODE AVAILABILITY', 'Figure legends', 'FIGURE LEGENDS', 'Figures', 'FIGURES', 'Conclusion', 'CONCLUSION', 'Conclusions', 'CONCLUSIONS']
+METHODS_TERMS = ['Method', 'METHOD', 'Methods', 'METHODS', 'Materials and Methods', 'Materials and methods', 'MATERIALS AND METHODS', 'Material and Method', 'Material and method', 'MATERIAL AND METHOD', 'Materials and Methods', 'Materials and methods', 'MATERIALS AND METHODS', 'Material & Method', 'Material & method', 'MATERIAL & METHOD', 'Materials & Methods', 'Materials & methods', 'MATERIALS & METHODS', 'Online Methods', 'Online methods', 'ONLINE METHODS', 'Online method', 'Online Method', 'ONLINE METHOD']
+METHODS_END_TERMS = REFERENCES_TERMS + DISCUSSION_END_TERMS + ['Results', 'RESULTS', 'Result', 'RESULTS', 'Experiment', 'EXPERIMENT', 'Experiments', 'EXPERIMENTS']
 
 
 class PDF:
-    def __init__(self, file):
+    def __init__(self, file, safe_doi):
         self.file = file
-        subprocess.call(['pdftotext', '-f', '2', file, file + '.txt'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.safe_doi = safe_doi
+        subprocess.call(['/Users/petereckmann/Downloads/xpdf-tools-mac-4.05/binARM/pdftotext', '-f', '2', file, file + '.txt'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.path.exists(file + '.txt'):
-            with open(file + '.txt', 'r', encoding='utf-8') as f:
+            with open(file + '.txt', 'r', encoding='iso-8859-1') as f:
                 self._text = f.read()
             os.remove(file + '.txt')
             self._text = self._remove_boilerplate(self._text)
         else:
-            print('could not be converted')
+            print('blank text being used')
             self._text = ''
+
+    def get_images(self, use_scaled):
+        folder = 'temp/images/' + self.safe_doi
+        os.mkdir(folder)
+        subprocess.call(['pdfimages', '-png', '-p', self.file, folder + '/'])
+
+        for f_name in os.listdir(folder):
+            try:
+                img = np.array(Image.open(f'{folder}/{f_name}'))
+            except Image.DecompressionBombError:
+                print('decompression bomb error, skipping')
+                os.remove(f'{folder}/{f_name}')
+                continue
+            if np.std(img) < 1:
+                os.remove(f'{folder}/{f_name}')
+            elif img.size > 200000000:
+                print('too big,', img.size)
+                os.remove(f'{folder}/{f_name}')
+            elif img.shape[0] < 10 or img.shape[1] < 10:
+                os.rename(f'{folder}/{f_name}', f'{folder}/no_barzooka{f_name}')
+
+        if use_scaled:
+            scaled_folder = 'temp/images_scaled/' + self.safe_doi
+            os.mkdir(scaled_folder)
+            for f_name in os.listdir(folder):
+                img = Image.open(folder + '/' + f_name)
+                img = img.resize((int(img.size[0] * 0.5) + 1, int(img.size[1] * 0.5) + 1), Image.LANCZOS)
+                img.save(scaled_folder + '/' + f_name)
+        return folder
 
     def _remove_boilerplate(self, text):
         text = text.replace('\n', ' <LINE_BREAK> ')
@@ -121,6 +154,9 @@ class PDF:
             text = self._without_section(text, DISCUSSION_END_TERMS, False)
             return self._remove_whitespace(text)
         elif section == 'methods':
+            text = self._start_at_section(text, METHODS_TERMS)
+            text = self._without_section(text, METHODS_END_TERMS, False)
+            return self._remove_whitespace(text)
             text = self._without_section(text, REFERENCES_TERMS, False)
             text = self._remove_whitespace(text)
             sents = []
