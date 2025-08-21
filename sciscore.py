@@ -5,7 +5,9 @@ import json
 import csv
 import unidecode
 import string
+import xml.etree.cElementTree as ET
 import subprocess
+from tqdm import tqdm
 
 
 auth = json.load(open('auth.json', 'r'))
@@ -24,16 +26,21 @@ class SciScore:
         self.api_key = api_key
         self.columns = []
         self.rows = []
+        self.id_to_methods = {}
+        self.id_to_pmcid = {}
 
     def _make_request(self, paper_id, text):
-        r = requests.post(url=auth['url'],
-                          data={'userId': self.user_id,
-                                'userType': self.user_type,
-                                'documentId': paper_id,
-                                'sectionContent': text,
-                                'apiKey': self.api_key,
-                                'jsonOutput': 'true'})
-        if r.status_code != 200:
+        try:
+            r = requests.post(url=auth['url'],
+                            data={'userId': self.user_id,
+                                    'userType': self.user_type,
+                                    'documentId': paper_id,
+                                    'sectionContent': text,
+                                    'apiKey': self.api_key,
+                                    'jsonOutput': 'true'})
+        except:
+            r = None
+        if r is None or r.status_code != 200:
             if text == unidecode.unidecode(text):
                 if text == ''.join([char for char in text if char in SMALL_CHARSET]):
                     raise Exception('sciscore error', r.status_code, r.text)
@@ -50,7 +57,7 @@ class SciScore:
             return
         if file.endswith('.pdf'):
             import pdftools
-            self.generate_report_from_text(pdftools.PDF(file).get_text('methods'), paper_id)
+            self.generate_report_from_text(pdftools.PDF(file, paper_id).get_text('methods'), paper_id)
         elif file.endswith('.docx') or file.endswith('.doc'):
             import docxtools
             self.generate_report_from_text(docxtools.Document(file).get_text('methods'), paper_id)
@@ -61,25 +68,45 @@ class SciScore:
             raise TypeError('invalid file type; please enter a .pdf, .xml, .docx, or .doc')
 
     def generate_report_from_pmid(self, pmid):
-        r = requests.get(f'https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/', params={'tool': 'sciscore-tools', 'email': 'petereckmann@gmail.com', 'ids': pmid}).text
+        try:
+            r = requests.get(f'https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/', params={'tool': 'sciscore-tools', 'email': 'petereckmann@gmail.com', 'ids': pmid}).text
+        except:
+            return
         if '<version pmcid="' in r:
             pmcid = r.split('<version pmcid="')[1].split('"')[0].split('.')[0]
-            return self.generate_report_from_pmcid(pmcid)
+            self.id_to_pmcid[pmid] = pmcid
+            return self.generate_report_from_pmcid(pmcid, id=pmid)
+        else:
+            self.id_to_pmcid[pmid] = 'no PMCID'
+            return self.generate_report_from_text('no methods', pmid)
 
-    def generate_report_from_pmcid(self, pmcid):
+    def generate_report_from_pmcid(self, pmcid, id=None):
+        if not id:
+            id = pmcid
         import jatstools
-        files = open('oa_file_list.txt', 'r').readlines()
-        for line in files:
+        for line in open('oa_file_list.txt', 'r'):
             if pmcid in line:
                 subprocess.check_call('rm -rf package/*', shell=True)
                 url = 'https://ftp.ncbi.nlm.nih.gov/pub/pmc/' + line.split()[0]
-                subprocess.check_call(f'curl -o package/package.tar.gz {url}', shell=True, stderr=subprocess.DEVNULL)
+                try:
+                    subprocess.check_call(f'curl -o package/package.tar.gz {url}', shell=True, stderr=subprocess.DEVNULL)
+                except:
+                    return
                 subprocess.check_call('cd package; gunzip -c package.tar.gz | tar xopf -', shell=True)
-                file = subprocess.check_output('find package/*/*.nxml', shell=True).decode('utf-8').strip()
-                self.generate_report_from_text(jatstools.XML(file).get_text('method'), pmcid)
+                try:
+                    file = subprocess.check_output('find package/*/*.nxml', shell=True).decode('utf-8').strip()
+                except:
+                    print('no nxml found for', pmcid)
+                    return
+                
+                #get rid of this
+                #return jatstools.XML(file).get_text('method')
+                self.generate_report_from_text(jatstools.XML(file).get_text('method'), id)
 
     def generate_report_from_text(self, methods, paper_id):
         folder_name = f"{self.folder}/{paper_id.replace('/', '_')}"
+        self.id_to_methods[paper_id] = methods
+        # return
         if methods == '':
             methods = 'blank'
         methods = methods.replace('', '').replace('', '')
@@ -116,6 +143,7 @@ class SciScore:
             f.write(json.dumps(report_json))
 
     def _fix_sent(self, sentence, doc_no_whitespace, whitespace_locs):
+        return sentence
         sentence_no_whitespace = sentence.replace(' ', '')
         sent_loc = doc_no_whitespace.find(sentence_no_whitespace)
         if sent_loc == -1:
@@ -135,7 +163,21 @@ class SciScore:
 
     def _add_row(self, report_json):
         self.rows.append([None for _ in range(len(self.columns))])
-        self._add_data('ID', report_json['docIdentifier'])
+        # self._add_data('PMID', report_json['docIdentifier'])
+        # if report_json['docIdentifier'] not in self.id_to_pmcid:
+        #     self.generate_report_from_pmid(report_json['docIdentifier'])
+        try:
+            self._add_data('PMCID', report_json['docIdentifier']) #self.id_to_pmcid[report_json['docIdentifier']])
+        except:
+            self._add_data('PMCID', 'no PMCID')
+        try:
+            if self.generate_report_from_pmcid(report_json['docIdentifier']).strip() == '':
+                self._add_data('Methods section available?', 'No')
+            else:
+                self._add_data('Methods section available?', 'Yes')
+            # self._add_data('Methods section available?', 'Yes' if (self.id_to_methods[report_json['docIdentifier']].strip() != '' and self.id_to_pmcid[report_json['docIdentifier']] != 'no PMCID') else 'No')
+        except:
+            self._add_data('Methods section available?', 'No')
         self._add_data('SciScore', report_json['sciscore'])
         for section in report_json['rigor-table']['sections']:
             for sentence in section['srList']:
@@ -180,11 +222,17 @@ class SciScore:
         self.rows = new_rows
 
     def make_csv(self, file):
-        for id in os.listdir(self.folder):
-            self._add_row(json.loads(open(f'{self.folder}/{id}/report.json', 'r', encoding='utf-8').read()))
+        for id in tqdm(os.listdir(self.folder)):
+            if id.endswith('.txt'):
+                self.rows.append([None for _ in range(len(self.columns))])
+                self._add_data('PMID', id.split('.')[0])
+                self._add_data('PMCID', 'error')
+                self._add_data('Methods section available?', 'No')
+            else:
+                self._add_row(json.loads(open(f'{self.folder}/{id}/report.json', 'r', encoding='utf-8').read()))  
         self._normalize_rows()
         for i, col in enumerate(self.columns):
-            if i < 2:
+            if i < 4:
                 continue
             max_order = ORDER.index(col.split(':')[0])
             max_j = 0
@@ -201,5 +249,68 @@ class SciScore:
                     self._swap_columns(i + 1, j)
                     break
         writer = csv.writer(open(file, 'w', encoding='utf-8', newline=''), quoting=csv.QUOTE_ALL)
-        writer.writerow(self.columns)
-        writer.writerows(self.rows)
+
+        
+        columns = ['PMCID', 
+                    'Methods section available?',
+                    'SciScore',
+                    'Rigor: Ethics',
+                    'Rigor: Ethics: IACUC',
+                    'Rigor: Ethics: IRB',
+                    'Rigor: Ethics: Euthanasia Agents',
+                    'Rigor: Ethics: Field Sample Permit',
+                    'Rigor: Ethics: Consent',
+                    'Rigor: Randomization',
+                    'Rigor: Blinding',
+                    'Rigor: Power Analysis',
+                    'Rigor: Replication',
+                    'Rigor: Replication: Type',
+                    'Rigor: Replication: Number',
+                    'Rigor: Code Information',
+                    'Rigor: Data Information',
+                    'Rigor: Protocol Information',
+                    'Rigor: Inclusion and Exclusion Criteria',
+                    'Rigor: Attrition',
+                    'Rigor: Cell Line Authentication',
+                    'Rigor: Cell Line Authentication: Authentication',
+                    'Rigor: Cell Line Authentication: Contamination',
+                    'Rigor: Sex as a biological variable',
+                    'Rigor: Subject Demographics: Age',
+                    'Rigor: Subject Demographics: Weight',
+                    'Resources: Antibodies count',
+                    'Resources: Antibodies with RRID count',
+                    'Resources: Antibodies with suggested RRID count',
+                    'Resources: Antibodies first sentence',
+                    'Resources: Experimental Models: Cell Lines count',
+                    'Resources: Experimental Models: Cell Lines with RRID count',
+                    'Resources: Experimental Models: Cell Lines with suggested RRID count',
+                    'Resources: Experimental Models: Cell Lines first sentence',
+                    'Resources: Recombinant DNA count',
+                    'Resources: Recombinant DNA with RRID count',
+                    'Resources: Recombinant DNA with suggested RRID count',
+                    'Resources: Recombinant DNA first sentence',
+                    'Resources: Experimental Models: Organisms/Strains count',
+                    'Resources: Experimental Models: Organisms/Strains with RRID count',
+                    'Resources: Experimental Models: Organisms/Strains with suggested RRID count',
+                    'Resources: Experimental Models: Organisms/Strains first sentence',
+                    'Resources: Software and Algorithms count',
+                    'Resources: Software and Algorithms with RRID count',
+                    'Resources: Software and Algorithms with suggested RRID count',
+                    'Resources: Software and Algorithms first sentence',
+                    'Misc: Oligonucleotides count',
+                    'Misc: Oligonucleotides first sentence',
+                    'Misc: Unresolved RRIDs count',
+                    'Misc: Unresolved RRIDs first sentence',
+                    'Misc: Statistical Tests count',
+                    'Misc: Statistical Tests first sentence']
+        writer.writerow(columns)
+        fixed_rows = []
+        for row in self.rows:
+            fixed_row = []
+            for col in columns:
+                if col in self.columns:
+                    fixed_row.append(str(row[self.columns.index(col)]).replace('not required.', 'not required').replace('not detected.', 'not detected'))
+                else:
+                    fixed_row.append('')
+            fixed_rows.append(fixed_row)
+        writer.writerows(fixed_rows)
